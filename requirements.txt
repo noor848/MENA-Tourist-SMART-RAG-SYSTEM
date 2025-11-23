@@ -1,0 +1,7 @@
+faiss-cpu
+sentence-transformers
+langchain
+langchain-text-splitters
+wikipedia-api
+requests
+beautifulsoup4
