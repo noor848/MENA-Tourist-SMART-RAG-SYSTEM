@@ -3,21 +3,31 @@ import pickle
 from sentence_transformers import SentenceTransformer
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langgraph.graph import END, StateGraph
 
-from typing import List, Dict
 from typing_extensions import TypedDict
 from langchain_ollama import OllamaLLM
 
 
-class LoadModels:
+class AgentState(TypedDict):
+    question: str
+    Answer: str
+    docs: list[str]
+    historical_questions: list[str]
+
+
+class RAGAgent:
     def __init__(self):
         self.model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2', device='cuda')
         self.index = faiss.read_index("heritage.index")
-
         self.llm = OllamaLLM(model="mistral:7b")
+        self.app = self.build_graph()
+
 
         self.chunks = []
         self.metadata = []
+
+        self.read_file("heritage.pkl")
 
     def read_file(self, file="heritage.pkl"):
         with open(file, 'rb') as f:
@@ -27,124 +37,205 @@ class LoadModels:
 
         print(f"✅ Loaded {len(self.chunks)} chunks\n")
 
-    def ask_question(self, query, k=3):
-        query_vector = self.model.encode([query])
-        distances, indices = self.index.search(query_vector, k)
+    def retriever_node(self, state: AgentState):
+        print("---NODE: RETRIEVE---")
+        query_vector = self.model.encode([state['question']])
+        distances, indices = self.index.search(query_vector, 10)
         context_chunks = [self.chunks[idx] for idx in indices[0]]
-        context = "\n\n".join(context_chunks)
-        prompt = f"""You are an assistant for question-answering tasks.
-    Use the following pieces of retrieved context to answer the question.
-    If you don't know the answer, just say that you don't know.
-    Be concise and use the Arabic context to answer the question.
 
-    Question: {query}
-    Context: {context}
+        return {
+            'question': state['question'],
+            'Answer': state.get('Answer', ''),
+            'docs': context_chunks,
+            'historical_questions': state['historical_questions'],
+        }
 
-    Helpful Answer:"""
+    def grader_docs_node(self, state: AgentState):
+        print("---NODE: GRADE DOCUMENTS---")
+        question = state['question']
+        docs = state['docs']
 
-        print(f"🔍 Searching for: {query}")
-        print("💭 Thinking...\n")
+        prompt_template = """You are a grader. Your job is to check if a
+retrieved document is relevant to a user question.
+Respond with a *single word*: 'yes' if relevant, 'no' if not.
 
-        answer = self.llm.invoke(prompt)
+Document: {document}
+Question: {question}
 
-        print(f"💬 Answer:\n{answer}\n")
+Answer:"""
 
-        print(f"📚 Sources:")
-        for idx in indices[0]:
-            print(f"  - {self.metadata[idx]['country']}")
-        print()
+        prompt = PromptTemplate.from_template(prompt_template)
+        grader_chain = prompt | self.llm | StrOutputParser()
 
-        return answer
+        relevant_docs = []
+        for doc in docs:
+            try:
+                result = grader_chain.invoke({"question": question, "document": doc})
+                score = result.strip().lower()
+                if "yes" in score:
+                    print("  -> Grader Decision: Relevant")
+                    relevant_docs.append(doc)
+                else:
+                    print("  -> Grader Decision: NOT Relevant")
+            except Exception as e:
+                print(f"  -> Grader: Error - {e}")
+                continue
 
-class AgentState(TypedDict):
-    question: str
-    Answer: str
-    docs:list[str]
-    historical_answer: list[str]
+        print(f"  -> Found {len(relevant_docs)} relevant documents")
 
+        return {
+            'question': question,
+            'Answer': state.get('Answer', ''),
+            'docs': relevant_docs,
+            'historical_questions': state['historical_questions'],
+        }
 
-def retriever_node(model, state:AgentState):
-    query_vector = model.encode([state['question']])
-    distances, indices = model.index.search(query_vector, k=10)
-    context_chunks = [model.chunks[idx] for idx in indices[0]]
+    def generate_node(self, state: AgentState):
+        print("---NODE: GENERATE---")
+        question = state["question"]
+        documents = state["docs"]
 
-    return {
-        'question': state['question'],
-        'Answer': '',
-        'docs': context_chunks,
-        'historical_answer': state['historical_answer'],
-    }
+        prompt_template = """You are an assistant for question-answering tasks.
+Use the following pieces of retrieved context to answer the question.
+If you don't know the answer, just say that you don't know.
+Answer in the same language as the question (Arabic, English, or French).
 
-def grader_docs_node(model, state:AgentState):
-    question = state['question']
-    docs= state['docs']
+Question: {question}
+Context: {context}
 
-    prompt_template = """You are a grader. Your job is to check if a
-    retrieved document is relevant to a user question.
-    Respond with a *single word*: 'yes' if relevant, 'no' if not.
+Helpful Answer:"""
 
-    Document: {document}
-    Question: {question}
+        prompt = PromptTemplate.from_template(prompt_template)
+        rag_chain = prompt | self.llm | StrOutputParser()
 
-    Answer:"""
+        generation = rag_chain.invoke({
+            "context": "\n\n".join(documents),
+            "question": question
+        })
 
-    prompt = PromptTemplate.from_template(prompt_template)
-    grader_chain = prompt | model.llm | StrOutputParser()
+        print(f"✅ Generated answer")
 
+        return {
+            'question': question,
+            'Answer': generation,
+            'docs': documents,
+            'historical_questions': state['historical_questions'],
+        }
 
-    relevant_docs = []
-    for doc in docs:
-        try:
-            result = grader_chain.invoke({"question": question, "document": doc})
-            score = result.strip().lower()
-            if "yes" in score:
-                print("  -> Grader Decision: Relevant")
-                relevant_docs.append(doc)
-            else:
-                print("  -> Grader Decision: NOT Relevant")
-        except Exception as e:
-            print(f"  -> Grader: Error - {e}")
-            continue
+    def rewriter_node(self, state: AgentState):
+        print("---NODE: REWRITE QUERY---")
+        question = state["question"]
+        historical_questions = state["historical_questions"]
 
-    return {
-    'question': question,
-    'Answer': '',
-    'docs': relevant_docs,
-    }
+        if question in historical_questions:
+            return {
+                "question": question,
+                "Answer": "Could not find relevant information after multiple attempts.",
+                "docs": [],
+                "historical_questions": historical_questions
+            }
 
-def generate_node(model, state:AgentState):
-    """Takes the question and documents, and generates an answer."""
-    print("---NODE: GENERATE---")
-    question = state["question"]
-    documents = state["docs"]
+        historical_questions.append(question)
 
-    prompt_template = """You are an assistant for question-answering tasks.
-    Use the following pieces of retrieved context to answer the question.
-    If you don't know the answer, just say that you don't know.
-    Be concise.
+        prompt_template = """You are a query rewriter. Rewrite the following question to be
+a concise and specific search query for a vector database.
+Respond ONLY with the rewritten query, nothing else.
 
-    Question: {question}
-    Context: {context}
+Original Question: {question}
 
-    Helpful Answer:"""
-    prompt = PromptTemplate.from_template(prompt_template)
-    rag_chain = prompt | model.llm | StrOutputParser()
+Rewritten Query:"""
 
-    generation = rag_chain.invoke({"context": "\n".join(documents), "question": question})
+        prompt = PromptTemplate.from_template(prompt_template)
+        rewrite_chain = prompt | self.llm | StrOutputParser()
 
-    return {
-    'question': question,
-    'Answer': generation,
-    'docs': state["docs"],
-    'historical_answer': state['historical_answer'],
-    }
+        new_question = rewrite_chain.invoke({"question": question}).strip()
+        print(f"  -> Rewritten: {new_question}")
 
+        return {
+            "question": new_question,
+            "Answer": "",
+            "docs": [],
+            "historical_questions": historical_questions
+        }
 
+    def decision_node(self, state: AgentState):
+        print("---NODE: DECISION---")
 
+        # If we have relevant docs, generate answer
+        if state['docs'] and len(state['docs']) > 0:
+            print("  -> Decision: GENERATE (found relevant docs)")
+            return "generate"
+
+        # If we've tried too many times, end
+        if len(state['historical_questions']) >= 3:
+            print("  -> Decision: END (too many attempts)")
+            return "end"
+
+        # Otherwise, rewrite query
+        print("  -> Decision: REWRITE (no relevant docs)")
+        return "rewrite"
+
+    def build_graph(self):
+        """Build the LangGraph workflow"""
+        graph = StateGraph(AgentState)
+
+        graph.add_node("retriever", self.retriever_node)
+        graph.add_node("grader", self.grader_docs_node)
+        graph.add_node("generate", self.generate_node)
+        graph.add_node("rewriter", self.rewriter_node)
+
+        graph.set_entry_point("retriever")
+
+        graph.add_edge("retriever", "grader")
+
+        graph.add_conditional_edges(
+            "grader",
+            self.decision_node,
+            {
+                "generate": "generate",
+                "rewrite": "rewriter",
+                "end": END
+            }
+        )
+
+        graph.add_edge("rewriter", "retriever")
+
+        graph.add_edge("generate", END)
+
+        return graph.compile()
+
+    def ask(self, question: str):
+        """Ask a question using the RAG agent"""
+        result = self.app.invoke({
+            "question": question,
+            "Answer": "",
+            "docs": [],
+            "historical_questions": []
+        })
+
+        print("\n" + "=" * 70)
+        print("FINAL ANSWER")
+        print("=" * 70)
+        print(result['Answer'])
+        print("=" * 70 + "\n")
+
+        return result['Answer']
 
 
 if __name__ == "__main__":
-    model = LoadModels()
-    model.read_file("heritage.pkl")
+    agent = RAGAgent()
+
+    print("\n🤖 RAG Agent Ready! Ask questions about Arab heritage.\n")
+
     while True:
-        model.ask_question(input("ENTER Q\n"))
+        question = input("❓ Your question (or 'quit' to exit): ").strip()
+
+        if question.lower() == 'quit':
+            print("Goodbye! 👋")
+            break
+
+        if question:
+            try:
+                agent.ask(question)
+            except Exception as e:
+                print(f"❌ Error: {e}\n")
