@@ -5,3 +5,8 @@ langchain-text-splitters
 wikipedia-api
 requests
 beautifulsoup4
+langchain-ollama
+huggingface_hub[hf_xet]
+wikipedia
+wikivoyage
+langchain-text-splitters

@@ -20,7 +20,8 @@ class RAGAgent:
     def __init__(self):
         self.model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2', device='cuda')
         self.index = faiss.read_index("heritage.index")
-        self.llm = OllamaLLM(model="mistral:7b")
+        #self.llm = OllamaLLM(model="mistral:7b")
+        self.llm = OllamaLLM(model="krith/phi-3.5-mini-instruct_uncensored:IQ3_M")
         self.app = self.build_graph()
 
 
