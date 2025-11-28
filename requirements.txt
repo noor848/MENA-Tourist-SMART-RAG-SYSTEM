@@ -5,3 +5,4 @@ langchain-text-splitters
 wikipedia-api
 requests
 beautifulsoup4
+streamlit

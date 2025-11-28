@@ -18,7 +18,7 @@ index = faiss.IndexFlatL2(768)
 chunks = []
 metadata = []
 
-files = glob("arab_heritage_by_country/*/_COMPLETE_*.txt")
+files = glob("_ALL_ARAB_HERITAGE_EN.txt")
 print(f"Found {len(files)} files\n")
 
 for file in files:
@@ -27,7 +27,6 @@ for file in files:
     with open(file, 'r', encoding='utf-8') as f:
         text = f.read()
 
-    country = file.split('_COMPLETE_')[1].replace('.txt', '').replace('_', ' ').title()
 
     file_chunks = text_splitter.split_text(text)
 
@@ -35,12 +34,11 @@ for file in files:
         vector = model.encode([chunk])
         index.add(vector)
         chunks.append(chunk)
-        metadata.append({'country': country})
 
     print(f"  Added {len(file_chunks)} chunks\n")
 
-faiss.write_index(index, "heritage.index")
-with open("heritage.pkl", 'wb') as f:
+faiss.write_index(index, "heritage_english.index")
+with open("heritage_EN.pkl", 'wb') as f:
     pickle.dump({'chunks': chunks, 'metadata': metadata}, f)
 
 print(f"✅ DONE! Saved {len(chunks)} chunks to FAISS")
