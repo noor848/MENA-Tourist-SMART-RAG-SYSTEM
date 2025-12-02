@@ -27,36 +27,33 @@ class RAGAgent:
             model="papluca/xlm-roberta-base-language-detection"
         )
 
-        # Language-specific indices and data
-        self.indices = {}
-        self.chunks_dict = {}
-        self.metadata_dict = {}
+        # Single English index for all queries
+        self.index = None
+        self.chunks = []
+        self.metadata = []
 
-        # Load Arabic index
-        self.load_index("arabic", "heritage_arabic.index", "heritage_AR.pkl")
-
-        # Load English index
-        self.load_index("english", "heritage_english.index", "heritage_EN.pkl")
+        # Load only English index
+        self.load_index("heritage_english.index", "heritage_EN.pkl")
 
         self.llm = OllamaLLM(model="aya-expanse:8b")
         self.app = self.build_graph()
 
-    def load_index(self, language: str, index_file: str, pkl_file: str):
-        """Load FAISS index and pickle data for a specific language"""
+    def load_index(self, index_file: str, pkl_file: str):
+        """Load FAISS index and pickle data (English only)"""
         try:
-            self.indices[language] = faiss.read_index(index_file)
+            self.index = faiss.read_index(index_file)
 
             with open(pkl_file, 'rb') as f:
                 data = pickle.load(f)
-                self.chunks_dict[language] = data['chunks']
-                self.metadata_dict[language] = data['metadata']
+                self.chunks = data['chunks']
+                self.metadata = data['metadata']
 
-            print(f"✅ Loaded {language} index with {len(self.chunks_dict[language])} chunks")
+            print(f"✅ Loaded English index with {len(self.chunks)} chunks")
         except Exception as e:
-            print(f"⚠️  Warning: Could not load {language} index: {e}")
-            self.indices[language] = None
-            self.chunks_dict[language] = []
-            self.metadata_dict[language] = []
+            print(f"❌ Error: Could not load English index: {e}")
+            self.index = None
+            self.chunks = []
+            self.metadata = []
 
     def detect_language(self, text: str) -> str:
         """Detect the language of the input text"""
@@ -73,49 +70,39 @@ class RAGAgent:
             elif detected_lang == 'en':
                 return 'english'
             else:
-                print(f"⚠️  Language '{detected_lang}' not supported. Defaulting to English.")
-                return 'unsupported'
+                # For other languages, default to English response
+                print(f"⚠️  Language '{detected_lang}' detected. Will respond in English.")
+                return 'english'
 
         except Exception as e:
             print(f"❌ Error detecting language: {e}")
-            return 'unsupported'
+            return 'english'
 
     def retriever_node(self, state: AgentState):
         print("---NODE: RETRIEVE---")
 
-        language = state['language']
-
-        # Check if language is supported
-        if language == 'unsupported':
+        # Check if index is loaded
+        if self.index is None:
             return {
                 'question': state['question'],
-                'Answer': 'Sorry, only Arabic and English are supported.',
+                'Answer': 'Sorry, the index is not available.',
                 'docs': [],
                 'historical_questions': state['historical_questions'],
-                'language': language
+                'language': state['language']
             }
 
-        # Check if index exists for this language
-        if language not in self.indices or self.indices[language] is None:
-            return {
-                'question': state['question'],
-                'Answer': f'Sorry, {language} index is not available.',
-                'docs': [],
-                'historical_questions': state['historical_questions'],
-                'language': language
-            }
-
-        # Retrieve from language-specific index
+        # Retrieve from English index (works for both Arabic and English queries
+        # because the embedding model is multilingual)
         query_vector = self.model.encode([state['question']])
-        distances, indices = self.indices[language].search(query_vector, 10)
-        context_chunks = [self.chunks_dict[language][idx] for idx in indices[0]]
+        distances, indices = self.index.search(query_vector, 10)
+        context_chunks = [self.chunks[idx] for idx in indices[0]]
 
         return {
             'question': state['question'],
             'Answer': state.get('Answer', ''),
             'docs': context_chunks,
             'historical_questions': state['historical_questions'],
-            'language': language
+            'language': state['language']
         }
 
     def grader_docs_node(self, state: AgentState):
@@ -124,17 +111,8 @@ class RAGAgent:
         docs = state['docs']
         language = state['language']
 
-        # Language-specific grading prompt
-        if language == 'arabic':
-            prompt_template = """أنت مُقيّم. مهمتك هي التحقق مما إذا كانت الوثيقة المسترجعة ذات صلة بسؤال المستخدم.
-أجب بكلمة واحدة فقط: 'yes' إذا كانت ذات صلة، 'no' إذا لم تكن كذلك.
-
-الوثيقة: {document}
-السؤال: {question}
-
-الإجابة:"""
-        else:
-            prompt_template = """You are a grader. Your job is to check if a
+        # Use English prompt for grading (internal process)
+        prompt_template = """You are a grader. Your job is to check if a
 retrieved document is relevant to a user question.
 Respond with a *single word*: 'yes' if relevant, 'no' if not.
 
@@ -176,7 +154,7 @@ Answer:"""
         documents = state["docs"]
         language = state["language"]
 
-        # Language-specific generation prompt
+        # Language-specific generation prompt - respond in the detected language
         if language == 'arabic':
             prompt_template = """أنت مساعد للإجابة على الأسئلة.
 استخدم أجزاء السياق المسترجعة التالية للإجابة على السؤال.
@@ -234,18 +212,11 @@ Helpful Answer:"""
 
         historical_questions.append(question)
 
-        # Language-specific rewriting prompt
-        if language == 'arabic':
-            prompt_template = """أنت مُعيد صياغة الاستعلامات. أعد صياغة السؤال التالي ليصبح
-استعلام بحث موجز ومحدد لقاعدة بيانات متجهية.
-قدم فقط الاستعلام المُعاد صياغته، لا شيء آخر.
-
-السؤال الأصلي: {question}
-
-الاستعلام المُعاد صياغته:"""
-        else:
-            prompt_template = """You are a query rewriter. Rewrite the following question to be
+        # Use English prompt for rewriting (internal process)
+        # But keep the query in its original language for better multilingual retrieval
+        prompt_template = """You are a query rewriter. Rewrite the following question to be
 a concise and specific search query for a vector database.
+Keep the query in the same language as the original question.
 Respond ONLY with the rewritten query, nothing else.
 
 Original Question: {question}
@@ -268,11 +239,6 @@ Rewritten Query:"""
 
     def decision_node(self, state: AgentState):
         print("---NODE: DECISION---")
-
-        # If language is unsupported, end immediately
-        if state['language'] == 'unsupported':
-            print("  -> Decision: END (unsupported language)")
-            return "end"
 
         # If we have relevant docs, generate answer
         if state['docs'] and len(state['docs']) > 0:
@@ -338,3 +304,12 @@ Rewritten Query:"""
 
         return result['Answer']
 
+
+# Example usage
+if __name__ == "__main__":
+    agent = RAGAgent()
+
+
+    # Test with Arabic question
+    print("\n🇸🇦 Testing Arabic question:")
+    agent.ask("ما أهم المناطق التاريخية في مدينة غزة؟")
