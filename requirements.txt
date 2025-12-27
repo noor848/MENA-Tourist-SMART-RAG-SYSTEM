@@ -7,3 +7,5 @@ requests
 beautifulsoup4
 streamlit
 langchain-google-genai
+mcp
+fastmcp
