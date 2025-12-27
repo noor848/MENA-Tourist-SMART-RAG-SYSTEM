@@ -6,3 +6,4 @@ wikipedia-api
 requests
 beautifulsoup4
 streamlit
+langchain-google-genai
