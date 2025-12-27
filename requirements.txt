@@ -1,8 +1,10 @@
-faiss-cpu
-sentence-transformers
-transformers
-langchain
-langchain-core
-langchain-google-genai
-langgraph
-fastmcp
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.4.0+cpu
+faiss-cpu==1.8.0
+sentence-transformers==3.0.1
+transformers==4.44.0
+langchain==0.3.0
+langchain-core==0.3.0
+langchain-google-genai==2.0.0
+langgraph==0.2.0
+fastmcp==2.12.3
