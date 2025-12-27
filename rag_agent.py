@@ -19,7 +19,7 @@ class AgentState(TypedDict):
 
 class RAGAgent:
     def __init__(self):
-        self.model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2', device='cuda')
+        self.model = SentenceTransformer('all-MiniLM-L6-v2', device='cuda')
         # Language detection model
         self.language_detector = pipeline(
             "text-classification",

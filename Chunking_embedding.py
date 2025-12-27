@@ -7,14 +7,14 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # Load model
 print("Loading model...")
-model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=1000,
     chunk_overlap=200
 )
 
-index = faiss.IndexFlatL2(768)
+index = faiss.IndexFlatL2(384)
 chunks = []
 metadata = []
 
