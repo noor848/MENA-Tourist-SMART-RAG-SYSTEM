@@ -25,7 +25,7 @@ class RAGAgent:
         self.language_detector = pipeline(
             "text-classification",
             model="papluca/xlm-roberta-base-language-detection",
-            device=0
+            device=-1
         )
 
         # Single English index for all queries
