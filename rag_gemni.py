@@ -5,7 +5,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
-from langchain_google_genai import ChatGoogleGenerativeAI  # ✅ Gemini API
+from langchain_google_genai import ChatGoogleGenerativeAI
 from transformers import pipeline
 import os
 
@@ -20,7 +20,10 @@ class AgentState(TypedDict):
 
 class RAGAgent:
     def __init__(self):
+        print("🔄 Initializing RAG Agent...")
+
         self.model = SentenceTransformer('sentence-transformers/LaBSE', device='cpu')
+
         # Language detection model
         self.language_detector = pipeline(
             "text-classification",
@@ -28,22 +31,32 @@ class RAGAgent:
             device=-1
         )
 
-        # Single English index for all queries
+        # Initialize empty structures
         self.index = None
         self.chunks = []
         self.metadata = []
 
-        # Load only English index
-        self.load_index("heritage_english.index", "heritage_EN.pkl")
+        # ✅ Load index files with error handling
+        if os.path.exists("heritage_english.index") and os.path.exists("heritage_EN.pkl"):
+            self.load_index("heritage_english.index", "heritage_EN.pkl")
+        else:
+            print("⚠️  WARNING: Index files not found!")
+            print("   - Looking for: heritage_english.index, heritage_EN.pkl")
+            print("   - Server will start but queries will fail")
 
-        # ✅ Use Gemini API
+        # ✅ Use environment variable for API key (SECURE!)
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("❌ GEMINI_API_KEY environment variable not set!")
+
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-exp",  # Free & fast model
-            google_api_key="AIzaSyBaPL88mkeJqv4klqGcgmta_cqCXTFTHr4",  # Direct API key
+            model="gemini-2.0-flash-exp",
+            google_api_key=api_key,  # ✅ Secure!
             temperature=0
         )
 
         self.app = self.build_graph()
+        print("✅ RAG Agent initialized successfully")
 
     def load_index(self, index_file: str, pkl_file: str):
         """Load FAISS index and pickle data (English only)"""
@@ -89,23 +102,33 @@ class RAGAgent:
         if self.index is None:
             return {
                 'question': state['question'],
-                'Answer': 'Sorry, the index is not available.',
+                'Answer': 'Sorry, the RAG index is not available. Please check if index files are loaded.',
                 'docs': [],
                 'historical_questions': state['historical_questions'],
                 'language': state['language']
             }
 
-        query_vector = self.model.encode([state['question']])
-        distances, indices = self.index.search(query_vector, 10)
-        context_chunks = [self.chunks[idx] for idx in indices[0]]
+        try:
+            query_vector = self.model.encode([state['question']])
+            distances, indices = self.index.search(query_vector, 10)
+            context_chunks = [self.chunks[idx] for idx in indices[0]]
 
-        return {
-            'question': state['question'],
-            'Answer': state.get('Answer', ''),
-            'docs': context_chunks,
-            'historical_questions': state['historical_questions'],
-            'language': state['language']
-        }
+            return {
+                'question': state['question'],
+                'Answer': state.get('Answer', ''),
+                'docs': context_chunks,
+                'historical_questions': state['historical_questions'],
+                'language': state['language']
+            }
+        except Exception as e:
+            print(f"❌ Error in retriever: {e}")
+            return {
+                'question': state['question'],
+                'Answer': f'Error retrieving documents: {str(e)}',
+                'docs': [],
+                'historical_questions': state['historical_questions'],
+                'language': state['language']
+            }
 
     def grader_docs_node(self, state: AgentState):
         print("---NODE: GRADE DOCUMENTS---")
@@ -276,29 +299,37 @@ Rewritten Query:"""
 
     def ask(self, question: str):
         """Ask a question using the RAG agent"""
-        language = self.detect_language(question)
+        try:
+            language = self.detect_language(question)
 
-        result = self.app.invoke({
-            "question": question,
-            "Answer": "",
-            "docs": [],
-            "historical_questions": [],
-            "language": language
-        })
+            result = self.app.invoke({
+                "question": question,
+                "Answer": "",
+                "docs": [],
+                "historical_questions": [],
+                "language": language
+            })
 
-        print("\n" + "=" * 70)
-        print("FINAL ANSWER")
-        print("=" * 70)
-        print(result['Answer'])
-        print("=" * 70 + "\n")
+            print("\n" + "=" * 70)
+            print("FINAL ANSWER")
+            print("=" * 70)
+            print(result['Answer'])
+            print("=" * 70 + "\n")
 
-        return result['Answer']
+            return result['Answer']
+        except Exception as e:
+            error_msg = f"Error processing question: {str(e)}"
+            print(f"❌ {error_msg}")
+            return error_msg
 
 
 # Example usage
 if __name__ == "__main__":
-    agent = RAGAgent()
+    try:
+        agent = RAGAgent()
 
-    # Test
-    print("\n🇸🇦 Testing Arabic question:")
-    agent.ask("ما أهم المناطق التاريخية في مدينة غزة؟")
+        # Test
+        print("\n🇸🇦 Testing Arabic question:")
+        agent.ask("ما أهم المناطق التاريخية في مدينة غزة؟")
+    except Exception as e:
+        print(f"❌ Failed to initialize RAG Agent: {e}")
