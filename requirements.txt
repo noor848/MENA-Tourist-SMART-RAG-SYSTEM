@@ -1,11 +1,8 @@
 faiss-cpu
 sentence-transformers
+transformers
 langchain
-langchain-text-splitters
-wikipedia-api
-requests
-beautifulsoup4
-streamlit
+langchain-core
 langchain-google-genai
-mcp
+langgraph
 fastmcp
